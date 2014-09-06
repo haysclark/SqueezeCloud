@@ -37,7 +37,7 @@ use base 'Slim::Player::Protocols::HTTP';
 my $CLIENT_ID = "112d35211af80d72c8ff470ab66400d8";
 my $prefs = preferences('plugin.squeezecloud');
 
-$prefs->init({ apiKey => "", playmethod => "stream" });
+$prefs->init({ apiKey => "", playmethod => "stream", disablePeerVerification => "enable" });
 
 sub canSeek { 1 }
 
@@ -47,9 +47,9 @@ sub addClientId {
 	my $prefix = "?";
 
 	if ($url =~ /\?/) {
-		my $prefix = "&";		
+		my $prefix = "&";
 	}
-	
+
 	my $decorated = $url . $prefix . "client_id=$CLIENT_ID";
 
 	if (0 && $prefs->get('apiKey')) {
@@ -63,7 +63,6 @@ sub _makeMetadata {
 	my ($json) = shift;
 
 	my $stream = addClientId(getStreamURL($json));
-	$stream =~ s/https/http/;
 
 	my $DATA = {
 		duration => int($json->{'duration'} / 1000),
@@ -113,7 +112,7 @@ sub scanUrl {
 sub gotNextTrack {
 	my $http   = shift;
 	my $client = $http->params->{client};
-	my $song   = $http->params->{song};     
+	my $song   = $http->params->{song};
 	my $url    = $song->currentTrack()->url;
 	my $track  = eval { from_json( $http->content ) };
 
@@ -129,16 +128,15 @@ sub gotNextTrack {
 				songName => $@ || $track->{error},
 			} );
 		}
-	
+
 		$http->params->{'errorCallback'}->( 'PLUGIN_SQUEEZECLOUD_NO_INFO', $track->{error} );
 		return;
 	}
-	
+
 	# Save metadata for this track
 	$song->pluginData( $track );
 
 	my $stream = addClientId(getStreamURL($track));
-	$stream =~ s/https/http/;
 	$log->info($stream);
 
 	my $ua = LWP::UserAgent->new(
@@ -169,16 +167,16 @@ sub gotNextTrackError {
 
 sub getNextTrack {
 	my ($class, $song, $successCb, $errorCb) = @_;
-		
+
 	my $client = $song->master();
 	my $url    = $song->currentTrack()->url;
-		
+
 	# Get next track
 	my ($id) = $url =~ m{^soundcloud://(.*)$};
-		
+
 	# Talk to SN and get the next track to play
 	my $trackURL = addClientId("http://api.soundcloud.com/tracks/" . $id . ".json");
-		
+
 	my $http = Slim::Networking::SimpleAsyncHTTP->new(
 		\&gotNextTrack,
 		\&gotNextTrackError,
@@ -190,9 +188,9 @@ sub getNextTrack {
 			timeout       => 35,
 		},
 	);
-		
+
 	main::DEBUGLOG && $log->is_debug && $log->debug("Getting track from soundcloud for $id");
-		
+
 	$http->get( $trackURL );
 }
 
@@ -239,7 +237,7 @@ use Data::Dumper;
 # Metadata for a URL, used by CLI/JSON clients
 sub getMetadataFor {
 	my ( $class, $client, $url ) = @_;
-	
+
 	return {} unless $url;
 
 	#$log->info("metadata: " . $url);
@@ -265,17 +263,17 @@ sub getMetadataFor {
 				}
 			}
 		}
-		
+
 		if ( main::DEBUGLOG && $log->is_debug ) {
 			$log->debug( "Need to fetch metadata for: " . join( ', ', @need ) );
 		}
-		
+
 		# $client->master->pluginData( fetchingMeta => 1 );
-		
+
 		# my $metaUrl = Slim::Networking::SqueezeNetwork->url(
 		# 	"/api/classical/v1/playback/getBulkMetadata"
 		# );
-		
+
 		# my $http = Slim::Networking::SqueezeNetwork->new(
 		# 	\&_gotBulkMetadata,
 		# 	\&_gotBulkMetadataError,

@@ -33,13 +33,15 @@ my $CLIENT_ID = "112d35211af80d72c8ff470ab66400d8";
 
 my %METADATA_CACHE= {};
 
+my $prefs = preferences('plugin.squeezecloud');
+$prefs->init({ apiKey => "", playmethod => "stream", disablePeerVerification => "enable" });
 
 BEGIN {
 	$log = Slim::Utils::Log->addLogCategory({
 		'category'     => 'plugin.squeezecloud',
 		'defaultLevel' => 'DEBUG',
 		'description'  => string('PLUGIN_SQUEEZECLOUD'),
-	});   
+	});
 
 	# Always use OneBrowser version of XMLBrowser by using server or packaged version included with plugin
 	if (exists &Slim::Control::XMLBrowser::findAction) {
@@ -54,13 +56,9 @@ BEGIN {
 	}
 }
 
-my $prefs = preferences('plugin.squeezecloud');
-
-$prefs->init({ apiKey => "", playmethod => "stream" });
-
 sub defaultMeta {
 	my ( $client, $url ) = @_;
-	
+
 	return {
 		title => Slim::Music::Info::getCurrentTitle($url)
 	};
@@ -111,7 +109,7 @@ sub _makeMetadata {
 		image => $icon,
 		cover => $icon,
 	};
- 
+
 	my %DATA1 = %$DATA;
 	my %DATA2 = %$DATA;
 	my %DATA3 = %$DATA;
@@ -127,16 +125,16 @@ sub _gotMetadataError {
 	my $client = $http->params('client');
 	my $url    = $http->params('url');
 	my $error  = $http->error;
-	
+
 	$log->is_debug && $log->debug( "Error fetching Web API metadata: $error" );
-	
+
 	$client->master->pluginData( webapifetchingMeta => 0 );
-	
+
 	# To avoid flooding the SOUNDCLOUD servers in the case of errors, we just ignore further
 	# metadata for this track if we get an error
 	my $meta = defaultMeta( $client, $url );
 	$meta->{_url} = $url;
-	
+
 	$client->master->pluginData( webapimetadata => $meta );
 }
 
@@ -154,7 +152,7 @@ sub _gotMetadata {
 	}
 
 	$client->master->pluginData( webapifetchingMeta => 0 );
-		
+
 	my $json = eval { from_json($content) };
 	my $user_name = $json->{'user'}->{'username'};
 
@@ -239,12 +237,12 @@ sub tracksHandler {
 	$log->warn('search type: ' . $searchType);
 	$log->warn("index: " . $index);
 	$log->warn("quantity: " . $quantity);
-	
+
 	my $menu = [];
-	
+
 	# fetch in stages as api only allows 50 items per response, cli clients require $quantity responses which can be more than 50
 	my $fetch;
-	
+
 	# FIXME: this could be sped up by performing parallel requests once the number of responses is known??
 
 	$fetch = sub {
@@ -305,21 +303,21 @@ sub tracksHandler {
 		my $queryUrl = "$method://api.soundcloud.com/$resource?offset=$i&limit=$quantity&" . $params . "&" . $search;
 
 		$log->warn("fetching: $queryUrl");
-		
+
 		Slim::Networking::SimpleAsyncHTTP->new(
-			
+
 			sub {
 				my $http = shift;
 				my $json = eval { from_json($http->content) };
-				
-				$parser->($json, $menu); 
-	
+
+				$parser->($json, $menu);
+
 				# max offset = 8000, max index = 200 sez soundcloud http://developers.soundcloud.com/docs#pagination
 				my $total = 8000 + $quantity;
 				if (exists $passDict->{'total'}) {
 					$total = $passDict->{'total'}
 				}
-				
+
 				$log->info("this page: " . scalar @$menu . " total: $total");
 
 				# TODO: check this logic makes sense
@@ -327,50 +325,50 @@ sub tracksHandler {
 					$total = $index + @$menu;
 					$log->debug("short page, truncate total to $total");
 				}
-			 
+
 				# awful hack
 				if ($searchType eq 'friend' && (defined $args->{'index'})) {
 					my @tmpmenu = $menu->[$index];
 					$menu = \@tmpmenu;
 				}
-		
+
 				$callback->({
 					items  => $menu,
 					offset => $index,
 					total  => $total,
 				});
 			},
-			
+
 			sub {
 				$log->warn("error: $_[1]");
 				$callback->([ { name => $_[1], type => 'text' } ]);
 			},
-			
+
 		)->get($queryUrl);
 	};
-		
+
 	$fetch->();
 }
 
 # TODO: make this async
 sub metadata_provider {
 	my ( $client, $url ) = @_;
-		
+
 	if (exists $METADATA_CACHE{$url}) {
 		return $METADATA_CACHE{$url};
 	}
-	
+
 	if ($url =~ /ak-media.soundcloud.com\/(.*\.mp3)/) {
 		return $METADATA_CACHE{$1};
-	} 
-	
+	}
+
 	if ( !$client->master->pluginData('webapifetchingMeta') ) {
 		# Fetch metadata in the background
 		Slim::Utils::Timers::killTimers( $client, \&fetchMetadata );
 			$client->master->pluginData( webapifetchingMeta => 1 );
 		fetchMetadata( $client, $url );
 	}
-	
+
 	return defaultMeta( $client, $url );
 }
 
@@ -405,7 +403,7 @@ sub urlHandler {
 			},
 		)->get($queryUrl);
 	};
-		
+
 	$fetch->();
 }
 
@@ -439,7 +437,7 @@ sub _parsePlaylist {
 	my $icon = $entry->{'artwork_url'} || "";
 	$icon =~ s/-large/-t500x500/g;
 
-	$title .= " ($titleInfo)";	
+	$title .= " ($titleInfo)";
 
 	return {
 		name => $title,
@@ -573,6 +571,18 @@ sub initPlugin {
 		weight => 10,
 	);
 
+	# Fix for Sonology devices where SSL is not working properly
+	# Suggested by erland: http://forums.slimdevices.com/showthread.php?92723-Soundcloud-plugin-for-squeezeserver&p=785794&viewfull=1#post785794
+	$log->info('Startup SSL verification setting: ' . $prefs->get('disablePeerVerification'));
+	eval "use IO::Socket::SSL";
+	if(!$@ && IO::Socket::SSL->can("set_client_defaults")) {
+		# Only disable SSL peer verification if the user has explicitly disabled it through the plugin settings page
+		if($prefs->get('disablePeerVerification') eq "disable") {
+			$log->info('Disabling SSL verification');
+			IO::Socket::SSL::set_client_defaults('SSL_verify_mode' => 0x0);
+		}
+	}
+
 	if (!$::noweb) {
 		require Plugins::SqueezeCloud::Settings;
 		Plugins::SqueezeCloud::Settings->new;
@@ -600,16 +610,16 @@ sub toplevel {
 	my ($client, $callback, $args) = @_;
 
 	my $callbacks = [
-		{ name => string('PLUGIN_SQUEEZECLOUD_HOT'), type => 'link',   
+		{ name => string('PLUGIN_SQUEEZECLOUD_HOT'), type => 'link',
 			url  => \&tracksHandler, passthrough => [ { params => 'order=hotness' } ], },
 
-		{ name => string('PLUGIN_SQUEEZECLOUD_NEW'), type => 'link',   
+		{ name => string('PLUGIN_SQUEEZECLOUD_NEW'), type => 'link',
 			url  => \&tracksHandler, passthrough => [ { params => 'order=created_at' } ], },
 
-		{ name => string('PLUGIN_SQUEEZECLOUD_SEARCH'), type => 'search',   
+		{ name => string('PLUGIN_SQUEEZECLOUD_SEARCH'), type => 'search',
 			url  => \&tracksHandler, passthrough => [ { params => 'order=hotness' } ], },
 
-		{ name => string('PLUGIN_SQUEEZECLOUD_TAGS'), type => 'search',   
+		{ name => string('PLUGIN_SQUEEZECLOUD_TAGS'), type => 'search',
 			url  => \&tracksHandler, passthrough => [ { type => 'tags', params => 'order=hotness' } ], },
 
 		# new playlists change too quickly for this to work reliably, the way xmlbrowser needs to replay the requests
@@ -622,22 +632,22 @@ sub toplevel {
 	];
 
 	if ($prefs->get('apiKey') ne '') {
-		push(@$callbacks, 
+		push(@$callbacks,
 			{ name => string('PLUGIN_SQUEEZECLOUD_ACTIVITIES'), type => 'link',
 				url  => \&tracksHandler, passthrough => [ { type => 'activities', parser => \&_parseActivities} ] }
 		);
 
-		push(@$callbacks, 
+		push(@$callbacks,
 			{ name => string('PLUGIN_SQUEEZECLOUD_FAVORITES'), type => 'link',
 				url  => \&tracksHandler, passthrough => [ { type => 'favorites' } ] }
 		);
-		push(@$callbacks, 
+		push(@$callbacks,
 			{ name => string('PLUGIN_SQUEEZECLOUD_FRIENDS'), type => 'link',
 				url  => \&tracksHandler, passthrough => [ { type => 'friends', parser => \&_parseFriends} ] },
 		);
 	}
 
-	push(@$callbacks, 
+	push(@$callbacks,
 		{ name => string('PLUGIN_SQUEEZECLOUD_URL'), type => 'search', url  => \&urlHandler, }
 	);
 
